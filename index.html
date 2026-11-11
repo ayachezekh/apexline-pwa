@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>APEXLINE – Playable Prototype</title>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;800&family=Saira:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#14101f;--ink:#f6ead8;--mute:#a89fb8;--amber:#ffb04a;--coral:#ff5e5b;--teal:#5fd1c9;--panel:#221b34;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Saira',system-ui,sans-serif;display:flex;justify-content:center}
+main{width:100%;max-width:1100px;padding:12px}
+.stage{position:relative;aspect-ratio:16/9;width:100%;background:#000;border-radius:6px;overflow:hidden;touch-action:none}
+canvas{width:100%;height:100%;display:block}
+#ov{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;padding:5%;background:linear-gradient(90deg,rgba(20,16,31,.92) 20%,rgba(20,16,31,.2));gap:10px}
+#ov h1{font:800 clamp(34px,7vw,84px)/0.95 'Saira Condensed',Impact,sans-serif;margin:0;letter-spacing:.02em;color:var(--amber)}
+#ov p{margin:0;max-width:34ch;color:var(--ink);font-size:clamp(13px,1.8vw,18px);line-height:1.45}
+button{font:600 14px 'Saira',sans-serif;color:var(--ink);background:var(--panel);border:1px solid #4a3f66;border-radius:4px;padding:9px 14px;cursor:pointer}
+button:hover{border-color:var(--amber)}
+button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+button.on{background:var(--amber);color:#1b1226;border-color:var(--amber)}
+#go{background:var(--coral);border-color:var(--coral);color:#fff;font-size:17px;padding:12px 26px;margin-top:6px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.bar span{color:var(--mute);font-size:13px;margin-right:4px}
+.hint{color:var(--mute);font-size:13px;margin-top:8px;line-height:1.5}
+#brake{display:none}
+@media (pointer:coarse){#brake{display:inline-block}}
+</style>
+<meta name="theme-color" content="#14101f">
+<meta name="description" content="APEXLINE arcade racing game. Play on desktop and mobile.">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+</head><body><main>
+<div class="stage"><canvas id="c" width="960" height="540"></canvas>
+<div id="ov"><h1 id="ovT">APEXLINE</h1><p id="ovP">Hold the line through the golden hour. Pick how much help you want, then drive. Clean, smooth driving fills your Flow meter.</p>
+<div class="bar" id="ovAssist"></div><div class="bar" id="ovTune"><span>Car setup</span></div><button id="go">Start driving</button></div></div>
+<div class="bar"><span>Assist level</span><span id="assists"></span><button id="rain">Rain: off</button><button id="brake">Hold to brake</button></div>
+<p class="hint">Steer with ← → or A D. Accelerate with ↑ or W, brake with ↓ or S. Press 1–4 to change assists, R for rain, P to pause, Esc for results. On touch, press the left or right side of the screen to steer; the car accelerates automatically.</p>
+</main>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),W=960,H=540;
+const LV=[{n:'Cruise',cf:.3,ctr:1.6,ab:1.1},{n:'Drive',cf:.55,ctr:.7,ab:1.7},{n:'Pro',cf:.9,ctr:0,ab:9},{n:'Master',cf:1.15,ctr:0,ab:9}];
+let lvl=1,rain=false,running=false;
+const segLen=200,roadW=2000,camH=1000,camD=.84,DD=140,MAX=12000,N_LANES=3;
+const S=[];
+function addSec(n,c){for(let i=0;i<n;i++){const t=Math.min(i/10,(n-i)/10,1);S.push({i:S.length,curve:c*(t*t*(3-2*t))})}}
+[[25,0],[40,2],[20,0],[50,-3],[30,0],[45,4],[25,-2],[60,0],[40,-4],[30,3],[40,0]].forEach(a=>addSec(a[0],a[1]));
+const N=S.length,TL=N*segLen;S.forEach(s=>{if(s.i%5===0){const side=(s.i/5)%2?1:-1;s.prop={x:side*(1.5+Math.random()*1.2),t:Math.random()<.7?0:1}}});
+let pos=0,x=0,speed=0,dist=0,flow=0,score=0,bgx=0,tod=.5,shake=0,hitT=0;let cd=0,paused=false,laps=0,best=0,lastPos=0,rank=13,brk=false,fin=false,dust=[],lapT=0,lastLap=0,bestLap=0,lastCd=0,banner=0,stage=0;try{best=+localStorage.getItem('apx_best')||0}catch(e){}
+const keys={},ptr={on:false,side:0};let brakeBtn=false;
+const cars=[];for(let i=0;i<12;i++)cars.push({z:1500+i*1100,d:1500+i*1100,tx:[-.6,0,.6][i%3],t:Math.random()*3,pers:i%3,x:[-.6,0,.6][i%3],sp:MAX*(.38+Math.random()*.4),col:['#5fd1c9','#f6ead8','#ff5e5b','#9b8cff'][i%4]});
+const KEY=[{t:'#2b2a5a',b:'#ff9a5a'},{t:'#3b8fd6',b:'#bfe3f0'},{t:'#3a2a63',b:'#ffb04a'},{t:'#07070f',b:'#2a2150'}];
+const hx=h=>[1,3,5].map(i=>parseInt(h.substr(i,2),16));
+const mix=(a,b,t)=>{const A=hx(a),B=hx(b);return 'rgb('+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(',')+')'};
+let ac=null,osc,og,flt;
+function audio(){if(ac)return;try{ac=new (window.AudioContext||window.webkitAudioContext)();osc=ac.createOscillator();osc.type='sawtooth';flt=ac.createBiquadFilter();flt.type='lowpass';flt.frequency.value=700;og=ac.createGain();og.gain.value=0;osc.connect(flt);flt.connect(og);og.connect(ac.destination);osc.start()}catch(e){ac=null}}
+function beep(f,d){if(!ac)return;try{const o=ac.createOscillator(),g=ac.createGain();o.frequency.value=f;g.gain.value=.08;o.connect(g);g.connect(ac.destination);o.start();g.gain.setTargetAtTime(0,ac.currentTime+d*.6,.03);o.stop(ac.currentTime+d)}catch(e){}}
+const fmt=s=>Math.floor(s/60)+':'+(s%60).toFixed(1).padStart(4,'0');
+function setLvl(l){lvl=l;document.querySelectorAll('.lv').forEach((b,i)=>b.classList.toggle('on',i%4===l))}
+['ovAssist','assists'].forEach(id=>{const el=document.getElementById(id);LV.forEach((a,i)=>{const b=document.createElement('button');b.className='lv'+(i===lvl?' on':'');b.textContent=a.n;b.onclick=()=>setLvl(i);el.appendChild(b)})});
+function toggleRain(){rain=!rain;document.getElementById('rain').textContent='Rain: '+(rain?'on':'off')}
+const TUNE=[{n:'Balanced',sp:1,cf:1,ac:1},{n:'Grip',sp:.92,cf:.7,ac:1.1},{n:'Top speed',sp:1.08,cf:1.25,ac:.9}];let T=TUNE[0];
+const tb=document.getElementById('ovTune');TUNE.forEach((t,i)=>{const b=document.createElement('button');b.className='tn'+(i===0?' on':'');b.textContent=t.n;b.onclick=()=>{T=t;document.querySelectorAll('.tn').forEach((e,j)=>e.classList.toggle('on',j===i))};tb.appendChild(b)});
+document.getElementById('rain').onclick=toggleRain;
+function start(){if(fin)reset();running=true;cd=3.4;document.getElementById('ov').style.display='none';audio();if(ac&&ac.state==='suspended')ac.resume()}
+document.getElementById('go').onclick=start;
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key>='1'&&e.key<='4')setLvl(+e.key-1);if(e.key.toLowerCase()==='r')toggleRain();if(e.key.toLowerCase()==='p'&&running)paused=!paused;if(e.key==='Escape'&&running)finish();if(!running&&(e.key==='Enter'||e.key===' '))start();if(e.key.startsWith('Arrow')||e.key===' ')e.preventDefault()});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+cv.addEventListener('pointerdown',e=>{const r=cv.getBoundingClientRect();ptr.on=true;ptr.side=(e.clientX-r.left)<r.width/2?-1:1});
+['pointerup','pointercancel','pointerleave'].forEach(t=>cv.addEventListener(t,()=>ptr.on=false));
+const bb=document.getElementById('brake');bb.onpointerdown=()=>brakeBtn=true;bb.onpointerup=bb.onpointerleave=()=>brakeBtn=false;
+const segAt=z=>S[Math.floor(((z%TL)+TL)%TL/segLen)];
+const ST=[{n:'Coastal Spring',g:['#34452a','#3c4f30'],t:'#35572f',tod:.5,rain:false},{n:'Desert Dusk',g:['#8a5a32','#946438'],t:'#6b5a2a',tod:.6,rain:false},{n:'Monsoon City',g:['#262b3a','#2c3243'],t:'#2a3a40',tod:.1,rain:true},{n:'Alpine Night',g:['#8896a8','#98a6b8'],t:'#4a6a60',tod:.8,rain:false}];
+function applyStage(){const th=ST[stage%ST.length];tod=th.tod;rain=th.rain;document.getElementById('rain').textContent='Rain: '+(rain?'on':'off');cars.forEach(c=>{c.base=c.base||c.sp;c.sp=c.base*(1+.1*stage)})}
+applyStage();
+function reset(){pos=0;x=0;speed=0;dist=0;flow=0;score=0;laps=0;lapT=0;lastLap=0;bestLap=0;lastPos=0;fin=false;stage=0;cars.forEach((c,i)=>{c.z=c.d=1500+i*1100});applyStage();document.getElementById('ovT').textContent='APEXLINE';document.getElementById('ovP').textContent='Hold the line through the golden hour. Pick how much help you want, then drive. Clean, smooth driving fills your Flow meter.';document.getElementById('go').textContent='Start driving'}
+function finish(){fin=true;running=false;if(og)og.gain.value=0;document.getElementById('ovT').textContent='P'+rank+' finish';document.getElementById('ovP').textContent='Score '+Math.floor(score).toLocaleString()+'. Best lap '+(bestLap?fmt(bestLap):'-')+'. Change your setup and race again.';document.getElementById('go').textContent='Race again';document.getElementById('ov').style.display='flex'}
+function update(dt){if(paused)return;if(cd>0){cd-=dt;tod=(tod+dt/160)%1;const k=Math.ceil(cd-.4);if(k!==lastCd){lastCd=k;beep(k>0?440:880,.18)}return}
+ const A=LV[lvl],seg=segAt(pos),pct=speed/MAX,dx=dt*2*pct;
+ const L=keys.arrowleft||keys.a||(ptr.on&&ptr.side<0),R=keys.arrowright||keys.d||(ptr.on&&ptr.side>0);
+ const gas=keys.arrowup||keys.w||ptr.on,br=keys.arrowdown||keys.s||brakeBtn;
+ if(L)x-=dx;if(R)x+=dx;
+ x-=dx*pct*seg.curve*A.cf*T.cf*(rain?1.35:1);
+ x-=x*A.ctr*dt*pct;
+ if(gas)speed+=MAX/5*T.ac*dt;else speed-=MAX/10*dt;
+ if(br)speed-=MAX/2.2*dt;brk=!!br;
+ if(Math.abs(seg.curve)*pct>A.ab&&!gas)speed-=MAX/3*dt;
+ if(A.ab<9&&Math.abs(seg.curve)*pct>A.ab*1.2)speed-=MAX/4*dt;
+ const off=Math.abs(x)>1.05;if(off&&speed>MAX*.15&&dust.length<60)dust.push({x:W/2+(Math.random()-.5)*200,y:H-30,vx:(Math.random()-.5)*90,vy:-30-Math.random()*60,l:1});dust.forEach(d=>{d.x+=d.vx*dt;d.y+=d.vy*dt;d.l-=dt*1.4});dust=dust.filter(d=>d.l>0);
+ if(off&&speed>MAX/4)speed-=MAX/2*dt;
+ x=Math.max(-2.2,Math.min(2.2,x));speed=Math.max(0,Math.min(MAX*T.sp,speed));
+ pos=(pos+speed*dt)%TL;dist+=speed*dt;rank=1+cars.filter(c=>c.d>dist).length;lapT+=dt;banner=Math.max(0,banner-dt);if(pos<lastPos-TL/2){laps++;score+=500;lastLap=lapT;if(!bestLap||lapT<bestLap)bestLap=lapT;lapT=0;beep(660,.12);if(laps%2===0){stage++;applyStage();banner=5;score+=1000+(13-rank)*100;beep(880,.3)}}lastPos=pos;
+ bgx+=seg.curve*pct*dt*60;tod=(tod+dt/160)%1;
+ const pz=(pos+camH/camD*1)%TL;let hit=false;
+ cars.forEach(c=>{c.z=(c.z+c.sp*dt)%TL;c.d+=c.sp*dt;c.t-=dt;if(c.t<=0){c.t=2+Math.random()*2;const lanes=[-.6,0,.6];let ahead=c.z-pos;if(ahead<0)ahead+=TL;c.tx=(c.pers===0&&ahead>0&&ahead<2500)?Math.max(-.7,Math.min(.7,x)):c.pers===1?lanes[Math.floor(Math.random()*3)]:c.tx}c.x+=(c.tx-c.x)*Math.min(1,dt*.9);let dz=c.z-pz;if(dz<-TL/2)dz+=TL;if(dz>TL/2)dz-=TL;
+  if(dz>-250&&dz<300&&Math.abs(c.x-x)<.32&&speed>c.sp){if(hitT<.2)beep(90,.14);speed=c.sp*.8;hit=true;shake=.4;hitT=1}});
+ if(!hit&&!off&&Math.abs(x)<.85&&pct>.5)flow=Math.min(1,flow+dt*.12);else if(off||hit)flow=Math.max(0,flow-(hit?1:dt*.5));
+ score+=speed*dt*.01*(1+flow*4);if(score>best){best=score;if(Math.random()<.02)try{localStorage.setItem('apx_best',String(Math.floor(best)))}catch(e){}}shake=Math.max(0,shake-dt);hitT=Math.max(0,hitT-dt*2);
+ if(ac){og.gain.value=running?.05:0;const g=(pct*5)%1;osc.frequency.value=60+g*150+pct*70;flt.frequency.value=500+pct*900}
+}
+function drawCar(cx,by,w,col,steer){
+ const h=w*.55;ctx.fillStyle='rgba(0,0,0,.35)';ctx.fillRect(cx-w*.52,by-h*.08,w*1.04,h*.12);
+ ctx.fillStyle='#111';ctx.fillRect(cx-w*.5,by-h*.3,w*.16,h*.3);ctx.fillRect(cx+w*.34,by-h*.3,w*.16,h*.3);
+ ctx.fillStyle=col;ctx.fillRect(cx-w*.46,by-h*.62,w*.92,h*.42);
+ ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(cx-w*.3+steer*w*.04,by-h*.95,w*.6,h*.36);
+ ctx.fillStyle=col;ctx.fillRect(cx-w*.34+steer*w*.04,by-h,w*.68,h*.1);
+ ctx.fillStyle=brk&&by>H-60?'#ff8a8a':'#b02a2a';ctx.fillRect(cx-w*.43,by-h*.55,w*.2,h*.1);ctx.fillRect(cx+w*.23,by-h*.55,w*.2,h*.1);
+}
+function render(){
+ const f=tod*4,i=Math.floor(f),t=f-i,a=KEY[i],b=KEY[(i+1)%4];
+ const night=i===2?t:i===3?1-t:0,top=mix(a.t,b.t,t),bot=mix(a.b,b.b,t);
+ const hz=H/2+camH*camD/ (1e9) ,horizon=H/2;
+ const g=ctx.createLinearGradient(0,0,0,horizon);g.addColorStop(0,top);g.addColorStop(1,bot);
+ ctx.save();if(shake>0)ctx.translate((Math.random()-.5)*8*shake,(Math.random()-.5)*8*shake);
+ ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ const sx=((W*.7-bgx*.15)%W+W)%W,sy=horizon-60-night*10+(1-Math.abs(.5-tod%1)*2)*0;
+ const sg=ctx.createRadialGradient(sx,horizon-40,4,sx,horizon-40,120);sg.addColorStop(0,'rgba(255,230,170,'+(1-night)+')');sg.addColorStop(1,'rgba(255,170,80,0)');
+ ctx.fillStyle=sg;ctx.fillRect(sx-130,horizon-170,260,200);
+ [[.4,'#2c2447',90],[.8,'#1d1733',60]].forEach(m=>{ctx.fillStyle=m[1];ctx.beginPath();ctx.moveTo(0,horizon);
+  for(let px=0;px<=W;px+=16){const q=(px+bgx*m[0])/180;ctx.lineTo(px,horizon-(Math.abs(Math.sin(q*1.3)+Math.sin(q*2.7+1))*.5+.2)*m[2])}
+  ctx.lineTo(W,horizon);ctx.fill()});
+ const base=Math.floor(pos/segLen),bs=S[base%N],bp=(pos%segLen)/segLen;
+ let cx0=0,ddx=-bp*bs.curve;const P=[];
+ for(let n=0;n<DD;n++){const gi=base+n,seg=S[gi%N],rz1=gi*segLen-pos,rz2=rz1+segLen;
+  const pr=(cam,rz)=>{const s=camD/rz;return{x:W/2+s*(-cam)*W/2,y:H/2+s*camH*H/2,w:s*roadW*W/2,s}};
+  if(rz1<=camD){cx0+=ddx;ddx+=seg.curve;P.push(null);continue}
+  const p1=pr(x*roadW-cx0,rz1),p2=pr(x*roadW-cx0-ddx,rz2);cx0+=ddx;ddx+=seg.curve;P.push({seg,p1,p2,n})}
+ const byseg={};cars.forEach(c=>{const k=Math.floor(c.z/segLen);(byseg[k]=byseg[k]||[]).push(c)});
+ const fog=mix(a.b,b.b,t).replace('rgb','rgba').replace(')',',');
+ for(let n=DD-1;n>=0;n--){const q=P[n];if(!q)continue;const{seg,p1,p2}=q,dk=Math.floor(seg.i/3)%2;
+  const th=ST[stage%ST.length];ctx.fillStyle=dk?th.g[0]:th.g[1];ctx.fillRect(0,p2.y,W,p1.y-p2.y+1);
+  const quad=(xa,ya,wa,xb,yb,wb,c)=>{ctx.fillStyle=c;ctx.beginPath();ctx.moveTo(xa-wa,ya);ctx.lineTo(xa+wa,ya);ctx.lineTo(xb+wb,yb);ctx.lineTo(xb-wb,yb);ctx.fill()};
+  quad(p1.x,p1.y,p1.w*1.15,p2.x,p2.y,p2.w*1.15,dk?'#ff5e5b':'#f6ead8');
+  quad(p1.x,p1.y,p1.w,p2.x,p2.y,p2.w,rain?(dk?'#25232f':'#2a2833'):(dk?'#2f2b3a':'#35313f'));
+  if(!dk)for(let l=-1;l<=1;l+=2)quad(p1.x+l*p1.w/3,p1.y,p1.w/38,p2.x+l*p2.w/3,p2.y,p2.w/38,'#f6ead8');
+  if(seg.i<2)for(let c=0;c<10;c++){const f1=p1.w*(2*c+1)/10,f2=p2.w*(2*c+1)/10;quad(p1.x-p1.w+f1,p1.y,p1.w/10,p2.x-p2.w+f2,p2.y,p2.w/10,(c+seg.i)%2?'#f6ead8':'#15111f')}
+  if(seg.i===2&&p1.w>4){const sc=p1.s*W/2;ctx.save();ctx.fillStyle='#4a4160';ctx.fillRect(p1.x-p1.w*1.22,p1.y-sc*1700,sc*50,sc*1700);ctx.fillRect(p1.x+p1.w*1.22-sc*50,p1.y-sc*1700,sc*50,sc*1700);ctx.fillStyle='#ffb04a';ctx.fillRect(p1.x-p1.w*1.22,p1.y-sc*1700,p1.w*2.44,sc*260);ctx.fillStyle='#15111f';ctx.font='800 '+Math.max(6,Math.round(sc*220))+'px "Saira Condensed",Impact,sans-serif';ctx.textAlign='center';ctx.fillText('FINISH',p1.x,p1.y-sc*1700+sc*215);ctx.restore()}
+  ctx.fillStyle=fog+(Math.pow(n/DD,2.2)*.95)+')';ctx.fillRect(0,p2.y,W,p1.y-p2.y+1);
+  if(seg.prop&&p1.w>3){const pp=seg.prop,px=p1.x+p1.s*pp.x*roadW*W/2,sc=p1.s*W/2;ctx.globalAlpha=1-Math.pow(n/DD,2.2)*.9;if(pp.t){ctx.fillStyle='#4a4160';ctx.fillRect(px-sc*18,p1.y-sc*1500,sc*36,sc*1500);ctx.fillStyle='#ffb04a';ctx.fillRect(px-sc*90,p1.y-sc*1500,sc*180,sc*50)}else{ctx.fillStyle='#4a3a2a';ctx.fillRect(px-sc*30,p1.y-sc*250,sc*60,sc*250);ctx.fillStyle=th.t;ctx.beginPath();ctx.moveTo(px-sc*260,p1.y-sc*200);ctx.lineTo(px,p1.y-sc*1100);ctx.lineTo(px+sc*260,p1.y-sc*200);ctx.fill()}ctx.globalAlpha=1}
+  (byseg[seg.i]||[]).forEach(c=>{const w=p1.s*500*W/2,cxp=p1.x+p1.s*c.x*roadW*W/2;if(w>2)drawCar(cxp,p1.y,w,c.col,0)});
+ }
+ if(night>.02){ctx.fillStyle='rgba(8,6,28,'+night*.5+')';ctx.fillRect(0,horizon,W,H)}
+ const steer=(keys.arrowleft||keys.a||(ptr.on&&ptr.side<0)?-1:0)+(keys.arrowright||keys.d||(ptr.on&&ptr.side>0)?1:0);
+ drawCar(W/2+steer*10,H-30,190,hitT>0?'#ffffff':'#ffb04a',steer);
+ if(rain){ctx.strokeStyle='rgba(200,220,255,.35)';ctx.lineWidth=1;ctx.beginPath();for(let r=0;r<110;r++){const rx=Math.random()*W,ry=Math.random()*H;ctx.moveTo(rx,ry);ctx.lineTo(rx-4,ry+16)}ctx.stroke()}
+ ctx.restore();
+ if(night>.1){const hg=ctx.createRadialGradient(W/2,H-60,10,W/2,H*.62,260);hg.addColorStop(0,'rgba(255,240,200,'+night*.35+')');hg.addColorStop(1,'rgba(255,240,200,0)');ctx.fillStyle=hg;ctx.fillRect(0,H*.4,W,H*.6)}
+ const sp=speed/MAX;if(sp>.6){ctx.strokeStyle='rgba(255,240,220,'+(sp-.6)*.5+')';ctx.lineWidth=2;ctx.beginPath();for(let k=0;k<14;k++){const an=Math.random()*6.283,r0=300+Math.random()*80,r1=r0+40+sp*120;ctx.moveTo(W/2+Math.cos(an)*r0*1.5,H/2+Math.sin(an)*r0*.8);ctx.lineTo(W/2+Math.cos(an)*r1*1.5,H/2+Math.sin(an)*r1*.8)}ctx.stroke()}
+ const vg=ctx.createRadialGradient(W/2,H/2,H*.45,W/2,H/2,H*.95);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.5)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
+ dust.forEach(d=>{ctx.fillStyle='rgba(180,150,110,'+d.l*.4+')';ctx.beginPath();ctx.arc(d.x,d.y,10+(1-d.l)*22,0,6.283);ctx.fill()});
+ // HUD
+ ctx.fillStyle='#f6ead8';ctx.font='800 64px "Saira Condensed",Impact,sans-serif';ctx.textAlign='left';
+ ctx.fillText(Math.round(speed/MAX*280),28,76);
+ ctx.font='600 16px Saira,sans-serif';ctx.fillStyle='#a89fb8';ctx.fillText('km/h   '+LV[lvl].n+' assist, '+T.n+' setup',28,98);
+ ctx.textAlign='right';ctx.fillStyle='#f6ead8';ctx.font='800 34px "Saira Condensed",Impact,sans-serif';ctx.fillText(Math.floor(score).toLocaleString(),W-28,52);
+ ctx.font='600 16px Saira,sans-serif';ctx.fillStyle='#a89fb8';ctx.fillText((dist/segLen/100).toFixed(1)+' km',W-28,74);
+ ctx.fillStyle='rgba(20,16,31,.7)';ctx.fillRect(W/2-150,H-26,300,10);
+ ctx.fillStyle=flow>.7?'#5fd1c9':'#ffb04a';ctx.fillRect(W/2-150,H-26,300*flow,10);
+ ctx.textAlign='center';ctx.fillStyle='#f6ead8';ctx.font='600 13px Saira,sans-serif';ctx.fillText('FLOW'.toLowerCase(),W/2,H-32);
+ const gr=Math.min(5,Math.floor(sp*5)+1),rp=(sp*5)%1;ctx.textAlign='left';ctx.fillStyle='rgba(20,16,31,.7)';ctx.fillRect(28,108,180,8);ctx.fillStyle=rp>.85?'#ff5e5b':'#5fd1c9';ctx.fillRect(28,108,180*rp,8);ctx.fillStyle='#f6ead8';ctx.font='800 30px "Saira Condensed",Impact,sans-serif';ctx.fillText('G'+gr,220,118);
+ ctx.textAlign='right';ctx.font='600 14px Saira,sans-serif';ctx.fillStyle='#a89fb8';ctx.fillText('Stage '+(stage+1)+'  Lap '+(laps%2+1)+'/2   Best '+Math.floor(best).toLocaleString(),W-28,94);ctx.fillText(fmt(lapT)+(lastLap?'   Last '+fmt(lastLap):'')+(bestLap?'   Best lap '+fmt(bestLap):''),W-28,128);ctx.fillStyle='rgba(20,16,31,.7)';ctx.fillRect(W-228,104,200,5);ctx.fillStyle='#ffb04a';ctx.fillRect(W-228,104,200*pos/TL,5);
+ ctx.textAlign='center';ctx.fillStyle='#f6ead8';ctx.font='800 40px "Saira Condensed",Impact,sans-serif';ctx.fillText('P'+rank+' / 13',W/2,52);if(cd>0){ctx.fillStyle='#ffb04a';ctx.font='800 150px "Saira Condensed",Impact,sans-serif';ctx.fillText(cd>.4?Math.ceil(cd-.4):'Go',W/2,H/2)}
+ if(banner>0){ctx.fillStyle='#ffb04a';ctx.font='800 72px "Saira Condensed",Impact,sans-serif';ctx.fillText('Stage '+(stage+1)+': '+ST[stage%ST.length].n,W/2,H/2-40);ctx.fillStyle='#f6ead8';ctx.font='600 20px Saira,sans-serif';ctx.fillText('Finish line crossed. Rivals are faster now.',W/2,H/2)}
+ if(paused){ctx.fillStyle='rgba(20,16,31,.6)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#f6ead8';ctx.font='800 64px "Saira Condensed",Impact,sans-serif';ctx.fillText('Paused',W/2,H/2)}
+}
+let last=performance.now();
+function loop(now){requestAnimationFrame(loop);try{const dt=Math.min(.05,(now-last)/1000);last=now;if(running)update(dt);else{bgx+=dt*20;tod=(tod+dt/160)%1}if(og&&(paused||!running))og.gain.value=0;render()}catch(e){console.error(e)}}
+requestAnimationFrame(loop);
+</script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(error => {
+      console.error("PWA service worker registration failed:", error);
+    });
+  });
+}
+</script>
+</body></html>
